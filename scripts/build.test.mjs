@@ -317,6 +317,59 @@ test('every page nests the footer columns inside .wrap.footer-top', () => {
   }
 });
 
+// ---------- one standard page header ----------
+test('every generated page has the same centred header: crumbs, one title and, when there is one, the lede', () => {
+  run(['scripts/build.mjs']);
+  const walk = (dir) => readdirSync(dir).flatMap((n) => {
+    const f = join(dir, n);
+    return statSync(f).isDirectory() ? (n === 'node_modules' ? [] : walk(f)) : (f.endsWith('.html') ? [f] : []);
+  });
+  // The home page has its own hero (hand-written), 404 is a hand-written page, and two index files are redirect stubs.
+  const exceptions = new Set(['index.html', '404.html', 'collections/index.html', 'guides/index.html']);
+  let checked = 0;
+  for (const file of walk(join(ROOT, 'site'))) {
+    const rel = relative(join(ROOT, 'site'), file);
+    if (exceptions.has(rel) || rel.startsWith('og')) continue;
+    const html = readFileSync(file, 'utf8');
+    const heroes = html.match(/<section class="page-hero[^"]*">/g) || [];
+    assert.equal(heroes.length, 1, `${rel}: one page header`);
+    assert.match(heroes[0], /class="page-hero (?:model-hero|prov-hero)"/, `${rel}: the header is the centred one, not the old left-aligned variant`);
+    const hero = html.slice(html.indexOf(heroes[0]), html.indexOf('</section>', html.indexOf(heroes[0])));
+    assert.equal((hero.match(/<nav class="crumbs">/g) || []).length, 1, `${rel}: breadcrumbs`);
+    assert.equal((hero.match(/<h1>/g) || []).length, 1, `${rel}: one title`);
+    checked += 1;
+  }
+  assert.ok(checked > 100, `the check covered ${checked} pages`);
+  // and the style centres it by default, so a new page cannot come out left-aligned by forgetting a class
+  const css = readFileSync(join(ROOT, 'site/styles.css'), 'utf8');
+  assert.match(css, /\.page-hero \.crumbs, \.page-hero h1 \{ text-align: center; \}/);
+  assert.doesNotMatch(css, /\.model-hero/);
+});
+
+// ---------- subtle interaction (CSS only) ----------
+test('the interaction layer is CSS only and respects prefers-reduced-motion and touch', () => {
+  const css = readFileSync(join(ROOT, 'site/styles.css'), 'utf8');
+  for (const token of ['--t-fast', '--t-base', '--t-slow', '--ease']) assert.match(css, new RegExp(`${token}:`), `${token} is defined once`);
+  assert.equal((css.match(/--t-fast:/g) || []).length, 1, 'the tokens are defined once');
+  // with reduced motion every movement goes: transitions, animations and smooth scrolling
+  const reduce = css.match(/@media \(prefers-reduced-motion: reduce\) \{[^\n]*\}/);
+  assert.ok(reduce, 'a reduced-motion block exists');
+  assert.match(reduce[0], /transition: none !important/);
+  assert.match(reduce[0], /animation: none !important/);
+  assert.match(reduce[0], /scroll-behavior: auto/);
+  // the underline of text links thickens only where there is a hover; links that are underlined at rest keep their underline
+  assert.match(css, /@media \(hover: hover\) \{[^@]*transition: text-decoration-thickness var\(--t-base\) var\(--ease\)[^@]*text-decoration-thickness: 2px/);
+  const hoverBlock = css.slice(css.indexOf('@media (hover: hover) {\n  /* These links'), css.indexOf('.chip:active'));
+  assert.doesNotMatch(hoverBlock, /text-decoration: none|background:/, 'the hover effect never removes the underline');
+  // the page-change fade and the target highlight are a layer that is off with reduced motion
+  assert.match(css, /@media \(prefers-reduced-motion: no-preference\) \{[^@]*@keyframes target-flash[\s\S]*?@view-transition \{ navigation: auto; \}/);
+  // only movement properties and colours: no property that moves the layout inside the new layer
+  const layer = css.slice(css.indexOf('/* ---------- subtle interaction'), css.indexOf('/* ---------- responsive ---------- */'));
+  assert.doesNotMatch(layer, /\b(width|height|margin|padding|top|left)\s*:/, 'the layer moves nothing that changes the layout');
+  // and no script: the layer adds none
+  for (const js of ['site/site.js', 'site/explorer.js', 'site/widget.js']) assert.doesNotMatch(readFileSync(join(ROOT, js), 'utf8'), /view-transition|target-flash/);
+});
+
 test('sitemap.xml lists no paginated updates pages (their count follows the commit count)', () => {
   const sitemap = readFileSync(join(ROOT, 'site/sitemap.xml'), 'utf8');
   assert.match(sitemap, /<loc>https:\/\/freellmapihub\.com\/updates<\/loc>/);
@@ -517,7 +570,7 @@ test('/best shows the podium of three and the methodology page states the rules'
   assert.equal((best.match(/<li class="best-item/g) || []).length, top.length, 'one card per provider of the top');
   for (const e of top) assert.ok(best.includes(`href="../p/${e.p.slug}"`), `${e.p.slug} is on /best`);
   const method = readFileSync(join(ROOT, 'site/best/methodology/index.html'), 'utf8');
-  assert.match(method, /Being a partner scores nothing/);
+  assert.match(method, /Money scores nothing/);
   assert.match(method, /editorial rating/);
   assert.match(method, /30/);
   assert.match(method, /internal rubric behind those ratings is not published/);
@@ -1257,7 +1310,7 @@ test('mobile sort select shows a placeholder for sorts it does not offer', () =>
   run('name', -1); assert.equal(sel.value, 'custom');
 });
 
-test('home: search box, Compare and API in the menu, and the star count rendered at build', () => {
+test('home: search box, Compare in the menu, and the star count rendered at build', () => {
   run(['scripts/build.mjs']);
   const index = readFileSync(join(ROOT, 'site/index.html'), 'utf8');
   assert.match(index, /<input type="search" id="q"[^>]*>/);
@@ -1265,7 +1318,6 @@ test('home: search box, Compare and API in the menu, and the star count rendered
   for (const page of [index, readFileSync(join(ROOT, 'site/compare/index.html'), 'utf8'), readFileSync(join(ROOT, 'site/p/groq.html'), 'utf8')]) {
     const nav = page.slice(page.indexOf('id="primary-nav"'), page.indexOf('</nav>', page.indexOf('id="primary-nav"')));
     assert.match(nav, /href="(\.\.\/)?compare\/"/);
-    assert.match(nav, /href="(\.\.\/)?api\/"/);
   }
   const { stars } = JSON.parse(readFileSync(join(ROOT, 'data/repo-stats.json'), 'utf8'));
   assert.ok(Number.isInteger(stars));
@@ -1315,17 +1367,54 @@ test('the client makes no GitHub API call and the home search covers model names
   assert.ok(searchText(groq).includes(groq.models_free[0].toLowerCase()), 'a real provider is found by one of its models');
 });
 
-test('header menu: only Models, Compare, API and The best; the other destinations live in the footer', () => {
+test('header menu: only Guides & Collections, Compare and The Best (highlighted); Models and API live in the footer', () => {
   run(['scripts/build.mjs']);
   const pages = ['site/index.html', 'site/compare/index.html', 'site/p/groq.html', 'site/models/index.html', 'site/guides-and-collections/index.html'];
   for (const rel of pages) {
     const html = readFileSync(join(ROOT, rel), 'utf8');
     const nav = html.slice(html.indexOf('id="primary-nav"'), html.indexOf('</nav>', html.indexOf('id="primary-nav"')));
-    for (const gone of ['guides-and-collections/', 'programs/startups', 'programs/research']) assert.ok(!nav.includes(gone), `${rel}: header still links ${gone}`);
-    for (const kept of ['models/', 'compare/', 'api/', 'best/']) assert.ok(nav.includes(kept), `${rel}: header lost ${kept}`);
+    const hrefs = [...nav.matchAll(/<a [^>]*href="([^"]+)"/g)].map((m) => m[1].replace(/^(\.\.\/)+|^\.\//, ''));
+    assert.deepEqual(hrefs, ['guides-and-collections/', 'compare/', 'best/'], `${rel}: the header menu is exactly Guides & Collections, Compare, The Best`);
+    assert.match(nav, /<a class="nav-best" href="[^"]*best\/"[^>]*>.*The Best<\/a>/s, `${rel}: The Best carries the highlight class`);
+    assert.equal((nav.match(/class="nav-best"/g) || []).length, 1, `${rel}: only one highlighted entry`);
     const footer = html.slice(html.indexOf('<footer'));
-    for (const dest of ['guides-and-collections/', 'programs/startups', 'programs/research']) assert.ok(footer.includes(dest), `${rel}: footer lacks ${dest}`);
+    for (const dest of ['models/', 'api/', 'programs/startups', 'programs/research']) assert.ok(footer.includes(dest), `${rel}: footer lacks ${dest}`);
   }
+});
+
+test('footer columns: where each link lives, and no GitHub star entry in Project', () => {
+  run(['scripts/build.mjs']);
+  const expected = {
+    Explore: ['#explorer', 'models/', 'guides-and-collections/', 'programs/startups', 'programs/research', 'free-gpu/', 'coding-tools/'],
+    Data: ['providers.json', 'api/', 'llms.txt', 'data-policy/', 'coverage/'],
+    Project: ['updates', 'changes/', 'state/', 'docs/methodology.md', 'CONTRIBUTING.md', 'agreements/'],
+  };
+  for (const rel of ['site/index.html', 'site/compare/index.html', 'site/p/groq.html', 'site/legal/privacy.html']) {
+    const html = readFileSync(join(ROOT, rel), 'utf8');
+    const footer = html.slice(html.indexOf('<footer'), html.indexOf('</footer>'));
+    const cols = footer.split('<div class="footer-col">').slice(1);
+    assert.equal(cols.length, 3, `${rel}: three link columns`);
+    for (const colHtml of cols) {
+      const col = colHtml.split('</div>')[0];
+      const name = col.match(/footer-h">([^<]+)</)[1];
+      const hrefs = [...col.matchAll(/<a [^>]*href="([^"]+)"/g)].map((m) => m[1].replace(/^(\.\.\/)+|^\.\//, '').replace(/^.*\/blob\/main\//, ''));
+      assert.deepEqual(hrefs, expected[name], `${rel}: column ${name}`);
+    }
+    assert.ok(!footer.includes('GitHub ★'), `${rel}: the footer has no "GitHub ★" entry`);
+  }
+});
+
+test('the privacy page and SECURITY.md say what the star count really does: no GitHub call from the browser', () => {
+  run(['scripts/build.mjs']);
+  const privacy = readFileSync(join(ROOT, 'site/legal/privacy.html'), 'utf8');
+  assert.match(privacy, /read from GitHub's public API by the process that builds the site/);
+  assert.doesNotMatch(privacy, /fetched directly from GitHub/);
+  // the company name ends with its own full stop: no sentence may add a second one
+  for (const page of ['site/legal/privacy.html', 'site/legal/terms.html']) assert.doesNotMatch(readFileSync(join(ROOT, page), 'utf8'), /Inc\.\./, `${page} has a double full stop after the company name`);
+  for (const rel of ['site/site.js', 'site/explorer.js', 'site/widget.js']) {
+    assert.doesNotMatch(readFileSync(join(ROOT, rel), 'utf8'), /api\.github\.com/, `${rel} must not call the GitHub API: the privacy page says the browser makes no such request`);
+  }
+  assert.doesNotMatch(readFileSync(join(ROOT, 'SECURITY.md'), 'utf8'), /live GitHub star count/);
 });
 
 test('provider sections: honest empty states, numbers only with source and date, no filler', () => {
@@ -1530,6 +1619,21 @@ const validateAfter = (mutate) => {
   writeFileSync(fixture, JSON.stringify(data));
   return exitOk(['scripts/validate.mjs', fixture]);
 };
+
+// A `generated` after today in UTC is what a contributor in a time zone ahead of UTC writes at the end of their day (2026-10-16 when it is still
+// 2026-10-15 in UTC). It must fail, with the way to write the day.
+test('validate: the dates of the dataset are UTC days and none is in the future', () => {
+  const data = JSON.parse(readFileSync(DATA, 'utf8'));
+  const withToday = (today, file = DATA) => { try { execFileSync(process.execPath, ['scripts/validate.mjs', file], { cwd: ROOT, stdio: 'pipe', env: { ...process.env, VALIDATE_TODAY: today } }); return ''; } catch (e) { return `${e.stdout}${e.stderr}`; } };
+  assert.equal(withToday(data.generated), '', 'generated is today: valid');
+  assert.equal(withToday('2999-01-01'), '', 'generated in the past: valid');
+  const day = new Date(Date.parse(`${data.generated}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+  assert.match(withToday(day), new RegExp(`generated \\(${data.generated}\\) is after today in UTC \\(${day}\\); write the dates of the dataset in UTC`), 'generated the day after "today" fails and says how to write it');
+  assert.equal(validateAfter((d) => { d.generated = '2999-01-01'; }), false, 'with the real clock, a generated far in the future fails');
+  const later = tmpFile('providers.json'); writeFileSync(later, JSON.stringify({ ...data, generated: '2026-10-16' }));
+  assert.match(withToday('2026-10-15', later), /after today in UTC \(2026-10-15\)/, 'the contributor in Asia: 2026-10-16 when it is 2026-10-15 in UTC');
+  assert.match(readFileSync(join(ROOT, 'CONTRIBUTING.md'), 'utf8'), /Dates are UTC days/, 'CONTRIBUTING says it');
+});
 
 test('model tier thresholds: edges, tier 0 versus no source, and the minimum votes', () => {
   assert.deepEqual(MODEL_TIER_THRESHOLDS, [[4, 1450], [3, 1400], [2, 1330], [1, 1250]]);
@@ -2119,13 +2223,13 @@ test('data_policy lot 4: the 13 providers that say they do not train were read f
   assert.ok(falses.length >= 14, 'the 13 read for the plan in lot 4, Runware (lot 5) and the later ones: every one carries plan_named false');
   for (const p of falses) {
     assert.equal(p.data_policy.plan_named, false, `${p.slug}: read for the plan, not named`);
-    assert.equal(p.data_policy.checked, '2026-10-15', `${p.slug}: read date`);
+    assert.ok(p.data_policy.checked >= '2026-10-15', `${p.slug}: read on or after the lot 4 day (a later re-read of a row is fine)`);
     assert.ok(p.data_policy.note && p.data_policy.note.length <= 300, `${p.slug}: note within 300 characters`);
   }
   for (const p of data.providers.filter((q) => q.data_policy && q.data_policy.trains_on_prompts !== false)) {
     // rows that say it may train were read for the plan later (lots 2, 3, 5 and the correction of the absence claims): true where the
     // clause names the free users or free usage (AssemblyAI, Voyage AI), false where it does not
-    const READ = { assemblyai: true, 'voyage-ai': true, elevenlabs: false, cartesia: false, 'retell-ai': false, deepgram: false, 'arli-ai': false };
+    const READ = { assemblyai: true, 'voyage-ai': true, elevenlabs: false, cartesia: false, 'retell-ai': false, deepgram: false, 'arli-ai': false, 'sarvam-ai': false, poolside: false };
     if (p.slug in READ) assert.equal(p.data_policy.plan_named, READ[p.slug], `${p.slug}: plan_named as read`);
     else assert.equal(p.data_policy.plan_named, undefined, `${p.slug}: not read for the plan yet, so no value is written`);
   }
@@ -2160,6 +2264,24 @@ test('data_policy lot 6: at least 26 of 68, AI21 says it does not train, with th
   assert.ok(md.split('\n').some((l) => l.startsWith('| **[AI21')), 'AI21 is in the no-training collection');
 });
 
+test('data_policy lot 7: 29 of 68, Poolside may train on your Content by its Terms of Use unless you opt out (#341)', () => {
+  const data = JSON.parse(readFileSync(DATA, 'utf8'));
+  assert.equal(data.providers.filter((p) => p.data_policy).length, 29, 'the count of covered providers');
+  const dp = data.providers.find((p) => p.slug === 'poolside').data_policy;
+  assert.equal(dp.trains_on_prompts, true, 'may train, even though you can opt out');
+  assert.equal(dp.retention, null, 'the terms state no retention period for Content');
+  assert.equal(dp.source, 'https://poolside.ai/legal/eula', 'the Terms of Use, which cover the APIs and Poolside Platform');
+  assert.equal(dp.checked, '2026-10-15'); assert.equal(dp.plan_named, false);
+  assert.equal(dp.quote, 'We may use your Content to provide, maintain, improve, and develop the Products and other Poolside offerings, including training our models, unless you opt-out.', 'section 4, literal');
+  assert.match(dp.note, /if you give Feedback or it is flagged for safety review/, 'the exceptions to the opt-out are in the note');
+  assert.ok(dp.quote.length <= 400 && dp.note.length <= 300);
+  const registry = JSON.parse(readFileSync(join(ROOT, 'data/quotes.json'), 'utf8'));
+  assert.ok(registry.entries.some((e) => e.slug === 'poolside' && e.kind === 'sentence' && e.text === dp.quote), 'the quote has its register entry');
+  const md = readFileSync(join(ROOT, 'collections/no-training.md'), 'utf8');
+  assert.ok(!md.split('\n').some((l) => l.startsWith('| **[Poolside')), 'Poolside is not in the no-training collection');
+  assert.match(readFileSync(join(ROOT, 'site/data-policy/index.html'), 'utf8'), /Poolside/, 'the data-policy page lists Poolside');
+});
+
 test('correction of the absence claims: no note says the page names no plan unless the page has none of the four words, and Voyage AI names free usage', () => {
   const data = JSON.parse(readFileSync(DATA, 'utf8'));
   const dpOf = (slug) => data.providers.find((p) => p.slug === slug).data_policy;
@@ -2171,7 +2293,7 @@ test('correction of the absence claims: no note says the page names no plan unle
 
 test('data_policy: Arli AI, from a contributor, states retention only: trains stays not confirmed, the quote is literal and has its register entry', () => {
   const data = JSON.parse(readFileSync(DATA, 'utf8'));
-  assert.equal(data.providers.filter((p) => p.data_policy).length, 27, 'the count of covered providers');
+  assert.ok(data.providers.filter((p) => p.data_policy).length >= 27, 'Arli AI raised the covered providers to 27; later rows only add (the exact count is pinned by the latest test)');
   const dp = data.providers.find((p) => p.slug === 'arli-ai').data_policy;
   assert.equal(dp.trains_on_prompts, null, 'the policy says nothing about training: not stated is not no');
   assert.match(dp.retention, /processed transiently and immediately discarded/); assert.equal(dp.plan_named, false);
